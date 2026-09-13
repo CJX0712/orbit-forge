@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OrbitForge · 引力锻造炉</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --border:#30363d; --txt:#e6edf3;
+    --muted:#8b949e; --accent:#58a6ff; --live:#3fb950; --dead:#0d1117;
+    --warn:#f0883e;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;}
+  .wrap{max-width:1040px;margin:0 auto;padding:20px;}
+  h1{font-size:20px;margin:0 0 4px;letter-spacing:.5px;}
+  h1 .v{color:var(--accent);}
+  .sub{color:var(--muted);font-size:12px;margin-bottom:16px;}
+  .layout{display:grid;grid-template-columns:1fr 280px;gap:16px;}
+  @media(max-width:820px){.layout{grid-template-columns:1fr;}}
+  .stage{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px;}
+  canvas{display:block;width:100%;height:auto;background:#05060a;border:1px solid var(--border);border-radius:4px;}
+  .side{display:flex;flex-direction:column;gap:12px;}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px;}
+  .card h2{font-size:12px;margin:0 0 10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;}
+  .row{display:flex;gap:8px;flex-wrap:wrap;}
+  button{background:#21262d;color:var(--txt);border:1px solid var(--border);border-radius:6px;
+    padding:7px 10px;font-size:12px;cursor:pointer;font-family:inherit;}
+  button:hover{border-color:var(--accent);}
+  button.primary{background:var(--accent);color:#0d1117;border-color:var(--accent);font-weight:600;}
+  input[type=text]{width:100%;background:#0d1117;color:var(--txt);border:1px solid var(--border);
+    border-radius:6px;padding:7px 9px;font-size:12px;font-family:inherit;}
+  label{font-size:11px;color:var(--muted);display:block;margin:8px 0 4px;}
+  .stats{display:flex;justify-content:space-between;font-size:12px;padding:4px 0;border-bottom:1px dashed var(--border);}
+  .stats:last-child{border-bottom:none;}
+  .stats b{color:var(--accent);}
+  .self{font-size:11px;line-height:1.7;}
+  .self .ok{color:var(--live);}
+  .self .bad{color:#f85149;}
+  .hint{font-size:11px;color:var(--muted);line-height:1.6;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>OrbitForge <span class="v">·</span> 引力锻造炉</h1>
+  <div class="sub">单文件离线 2D 引力 n-body 模拟 · 动量/能量守恒 · 二体圆轨道 — <a href="https://github.com/CJX0712/orbit-forge" style="color:var(--accent)">github.com/CJX0712/orbit-forge</a></div>
+
+  <div class="layout">
+    <div class="stage">
+      <canvas id="cv" width="600" height="600"></canvas>
+      <div class="row" style="margin-top:12px;">
+        <button id="play" class="primary">▶ 播放</button>
+        <button id="step">⏭ 单步</button>
+        <button id="reset" class="warn">重置</button>
+        <button id="regen">🎲 重新生成</button>
+      </div>
+      <label>速度（步/秒）</label>
+      <input id="speed" type="range" min="1" max="120" value="40">
+    </div>
+
+    <div class="side">
+      <div class="card">
+        <h2>状态</h2>
+        <div class="stats"><span>天体数</span><b id="nb">0</b></div>
+        <div class="stats"><span>步数</span><b id="steps">0</b></div>
+        <div class="stats"><span>总动量 |P|</span><b id="mom">0</b></div>
+        <div class="stats"><span>总能量 E</span><b id="nrg">0</b></div>
+        <div class="stats"><span>能量漂移</span><b id="drift">0%</b></div>
+      </div>
+
+      <div class="card">
+        <h2>确定性种子</h2>
+        <div style="display:flex;gap:6px;">
+          <input id="seed" type="text" placeholder="任意文字/数字" value="晨星">
+        </div>
+        <label>天体数 <span id="nLabel">12</span></label>
+        <input id="nn" type="range" min="2" max="40" value="12">
+        <div class="row" style="margin-top:8px;">
+          <button id="applyseed">用种子生成</button>
+        </div>
+        <div class="hint" style="margin-top:6px;">同种子 + 同数量 = 同一宇宙。GC 用速度 Verlet 积分，动量严格守恒。</div>
+      </div>
+
+      <div class="card">
+        <h2>内置自检</h2>
+        <div class="self" id="selfcheck">点击「运行自检」验证守恒律与轨道正确性。</div>
+        <div class="row" style="margin-top:8px;">
+          <button id="selftest">运行自检</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script id="engine">
+// ===== OrbitForge engine (pure, headless-extractable) =====
+const NBody = (function(){
+  const G = 1.0;
+  let soft = 3; // softening to cap near-contact forces and avoid singularities
+
+  function makeBody(x, y, vx, vy, m){ return { x, y, vx, vy, m }; }
+
+  function clone(bodies){
+    return bodies.map(b => ({ x: b.x, y: b.y, vx: b.vx, vy: b.vy, m: b.m }));
+  }
+
+  // accelerations via Newtonian pairwise gravity (Newton's 3rd law by construction)
+  function accel(bodies){
+    const n = bodies.length;
+    const a = bodies.map(() => [0, 0]);
+    for (let i = 0; i < n; i++){
+      for (let j = i + 1; j < n; j++){
+        const dx = bodies[j].x - bodies[i].x;
+        const dy = bodies[j].y - bodies[i].y;
+        const r2 = dx * dx + dy * dy + soft * soft;
+        const r = Math.sqrt(r2);
+        const inv = G / (r2 * r); // G / r^3
+        const fx = inv * dx, fy = inv * dy; // per unit product
+        a[i][0] += fx * bodies[j].m; a[i][1] += fy * bodies[j].m;
+        a[j][0] -= fx * bodies[i].m; a[j][1] -= fy * bodies[i].m;
+      }
+    }
+    return a;
+  }
+
+  // velocity Verlet step
+  function step(bodies, dt){
+    const a = accel(bodies);
+    for (let i = 0; i < bodies.length; i++){
+      bodies[i].vx += 0.5 * a[i][0] * dt;
+      bodies[i].vy += 0.5 * a[i][1] * dt;
+      bodies[i].x += bodies[i].vx * dt;
+      bodies[i].y += bodies[i].vy * dt;
+    }
+    const a2 = accel(bodies);
+    for (let i = 0; i < bodies.length; i++){
+      bodies[i].vx += 0.5 * a2[i][0] * dt;
+      bodies[i].vy += 0.5 * a2[i][1] * dt;
+    }
+    return bodies;
+  }
+
+  function momentum(bodies){
+    let px = 0, py = 0;
+    for (const b of bodies){ px += b.m * b.vx; py += b.m * b.vy; }
+    return { x: px, y: py, mag: Math.sqrt(px * px + py * py) };
+  }
+  function energy(bodies){
+    let ke = 0, pe = 0;
+    for (let i = 0; i < bodies.length; i++){
+      const b = bodies[i];
+      ke += 0.5 * b.m * (b.vx * b.vx + b.vy * b.vy);
+      for (let j = i + 1; j < bodies.length; j++){
+        const dx = bodies[j].x - bodies[i].x, dy = bodies[j].y - bodies[i].y;
+        const r = Math.sqrt(dx * dx + dy * dy + soft * soft);
+        pe -= G * b.m * bodies[j].m / r;
+      }
+    }
+    return ke + pe;
+  }
+
+  function seededBodies(seedStr, n, span){
+    n = n || 12; span = span || 600;
+    let st = 0; const str = String(seedStr);
+    for (let i = 0; i < str.length; i++) st = (st * 31 + str.charCodeAt(i)) >>> 0;
+    st = st || 0x9e3779b9;
+    const rnd = () => { st = (st * 1664525 + 1013904223) >>> 0; return st / 4294967296; };
+    const arr = [];
+    for (let i = 0; i < n; i++){
+      const x = 40 + rnd() * (span - 80);
+      const y = 40 + rnd() * (span - 80);
+      const vx = (rnd() - 0.5) * 0.6;
+      const vy = (rnd() - 0.5) * 0.6;
+      const m = 2 + rnd() * 10;
+      arr.push(makeBody(x, y, vx, vy, m));
+    }
+    return arr;
+  }
+
+  // two-body circular orbit: massive central + light satellite, analytic speed
+  function circularTwoBody(Gval, M, r){
+    const v = Math.sqrt(Gval * M / r);
+    return [ makeBody(300, 300, 0, 0, M), makeBody(300 + r, 300, 0, v, 1) ];
+  }
+
+  return { G, get soft(){ return soft; }, set soft(v){ soft = v; },
+    makeBody, clone, accel, step, momentum, energy, seededBodies, circularTwoBody };
+})();
+if (typeof module !== 'undefined' && module.exports) module.exports = NBody;
+</script>
+
+<script>
+// ===== UI =====
+(function(){
+  const cv = document.getElementById('cv');
+  const ctx = cv.getContext('2d');
+  const W = cv.width, H = cv.height;
+  let bodies = [], trails = [], steps = 0, running = false, timer = null;
+  let E0 = 0;
+
+  function draw(){
+    ctx.fillStyle = '#05060a'; ctx.fillRect(0, 0, W, H);
+    // trails
+    for (let i = 0; i < trails.length; i++){
+      const t = trails[i];
+      ctx.strokeStyle = 'rgba(88,166,255,' + (0.05 + 0.25 * (i / trails.length)) + ')';
+      ctx.beginPath();
+      for (let k = 0; k < t.length; k++){
+        if (k === 0) ctx.moveTo(t[k].x, t[k].y); else ctx.lineTo(t[k].x, t[k].y);
+      }
+      ctx.stroke();
+    }
+    // bodies
+    for (const b of bodies){
+      const rad = 2 + Math.cbrt(b.m) * 1.6;
+      ctx.fillStyle = '#58a6ff';
+      ctx.beginPath(); ctx.arc(b.x, b.y, rad, 0, Math.PI * 2); ctx.fill();
+    }
+    const mom = NBody.momentum(bodies);
+    const E = NBody.energy(bodies);
+    document.getElementById('nb').textContent = bodies.length;
+    document.getElementById('steps').textContent = steps;
+    document.getElementById('mom').textContent = mom.mag.toFixed(3);
+    document.getElementById('nrg').textContent = E.toFixed(2);
+    const drift = E0 ? Math.abs((E - E0) / E0) * 100 : 0;
+    document.getElementById('drift').textContent = drift.toFixed(3) + '%';
+  }
+
+  function tick(){
+    NBody.step(bodies, 0.5);
+    steps++;
+    for (let i = 0; i < bodies.length; i++){
+      if (!trails[i]) trails[i] = [];
+      trails[i].push({ x: bodies[i].x, y: bodies[i].y });
+      if (trails[i].length > 80) trails[i].shift();
+    }
+    draw();
+  }
+  function stop(){ running = false; clearInterval(timer); timer = null; document.getElementById('play').textContent = '▶ 播放'; }
+  function play(){
+    if (running){ stop(); return; }
+    running = true; document.getElementById('play').textContent = '⏸ 暂停';
+    const sp = +document.getElementById('speed').value;
+    timer = setInterval(tick, 1000 / sp);
+  }
+
+  function regen(){
+    stop();
+    const n = +document.getElementById('nn').value;
+    const seed = document.getElementById('seed').value || '晨星';
+    bodies = NBody.seededBodies(seed, n, 600);
+    trails = []; steps = 0; E0 = NBody.energy(bodies);
+    document.getElementById('nLabel').textContent = n;
+    draw();
+  }
+  function reset(){
+    stop();
+    const n = +document.getElementById('nn').value;
+    const seed = document.getElementById('seed').value || '晨星';
+    bodies = NBody.seededBodies(seed, n, 600);
+    trails = []; steps = 0; E0 = NBody.energy(bodies);
+    draw();
+  }
+
+  document.getElementById('play').onclick = play;
+  document.getElementById('step').onclick = () => { stop(); tick(); };
+  document.getElementById('reset').onclick = reset;
+  document.getElementById('regen').onclick = regen;
+  document.getElementById('applyseed').onclick = regen;
+  document.getElementById('nn').oninput = e => { document.getElementById('nLabel').textContent = e.target.value; };
+  document.getElementById('speed').oninput = e => { if (running){ stop(); play(); } };
+
+  document.getElementById('selftest').onclick = () => {
+    const out = [];
+    const T = (name, cond) => out.push((cond ? '<span class="ok">✓</span> ' : '<span class="bad">✗</span> ') + name);
+    // momentum conservation over 800 steps (velocity Verlet -> exact)
+    const sys = NBody.seededBodies('check', 10, 600);
+    const p0 = NBody.momentum(sys).mag;
+    for (let i = 0; i < 800; i++) NBody.step(sys, 0.5);
+    const p1 = NBody.momentum(sys).mag;
+    T('动量守恒：800 步 |P| 漂移 < 1e-6', Math.abs(p1 - p0) < 1e-6);
+    // energy conservation (small dt)
+    const sys2 = NBody.seededBodies('energy', 10, 600);
+    const e0 = NBody.energy(sys2);
+    for (let i = 0; i < 800; i++) NBody.step(sys2, 0.5);
+    const e1 = NBody.energy(sys2);
+    T('能量守恒：800 步相对漂移 < 1%', e0 !== 0 && Math.abs((e1 - e0) / e0) < 0.01);
+    // Newton's 3rd law: net internal force = 0
+    const a = NBody.accel(sys2);
+    let fx = 0, fy = 0;
+    for (let i = 0; i < sys2.length; i++){ fx += a[i][0] * sys2[i].m; fy += a[i][1] * sys2[i].m; }
+    T('牛顿第三定律：系统合力 ≈ 0', Math.abs(fx) < 1e-9 && Math.abs(fy) < 1e-9);
+    // two-body circular orbit: radius stays ~constant
+    const ps = NBody.soft;
+    NBody.soft = 0;
+    const tb = NBody.circularTwoBody(NBody.G, 1000, 200);
+    const r0 = Math.hypot(tb[1].x - tb[0].x, tb[1].y - tb[0].y);
+    let maxDev = 0;
+    for (let i = 0; i < 400; i++){
+      NBody.step(tb, 0.5);
+      const r = Math.hypot(tb[1].x - tb[0].x, tb[1].y - tb[0].y);
+      maxDev = Math.max(maxDev, Math.abs(r - r0));
+    }
+    NBody.soft = ps;
+    T('二体圆轨道：400 步半径偏差 < 5%', maxDev / r0 < 0.05);
+    // determinism
+    const d1 = NBody.seededBodies('晨星', 12, 600), d2 = NBody.seededBodies('晨星', 12, 600);
+    let same = true;
+    for (let i = 0; i < d1.length; i++) if (JSON.stringify(d1[i]) !== JSON.stringify(d2[i])) same = false;
+    T('种子确定性：同种子同数组', same);
+    const d3 = NBody.seededBodies('别的', 12, 600);
+    T('种子区分：异种子异数组', JSON.stringify(d1) !== JSON.stringify(d3));
+    // no NaN
+    const sys3 = NBody.seededBodies('nan', 15, 600);
+    for (let i = 0; i < 200; i++) NBody.step(sys3, 0.5);
+    let nan = false; for (const b of sys3) if (!isFinite(b.x) || !isFinite(b.y)) nan = true;
+    T('数值稳定：200 步无 NaN/Inf', !nan);
+    document.getElementById('selfcheck').innerHTML = out.join('<br>');
+  };
+
+  regen();
+})();
+</script>
+</body>
+</html>
