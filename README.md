@@ -1,5 +1,12 @@
 # OrbitForge · 引力锻造炉
 
+<p align="center">
+  <a href="https://github.com/CJX0712/orbit-forge/actions/workflows/ci.yml"><img src="https://github.com/CJX0712/orbit-forge/actions/workflows/ci.yml/badge.svg" alt="ci"></a>
+  <a href="https://github.com/CJX0712/orbit-forge/releases"><img src="https://img.shields.io/github/v/release/CJX0712/orbit-forge?sort=semver" alt="release"></a>
+  <a href="https://github.com/CJX0712/orbit-forge/blob/main/LICENSE"><img src="https://img.shields.io/github/license/CJX0712/orbit-forge" alt="license"></a>
+  <img src="https://img.shields.io/badge/author-%E6%99%A8%E6%98%9F-1f6feb" alt="author">
+</p>
+
 单文件离线 2D 引力 n-body 模拟器。两两牛顿万有引力（带 softening），速度 Verlet 积分，canvas 绘制天体与轨道尾迹。
 
 > 动量严格守恒、能量近似守恒、二体可成圆轨道——不是「看起来像物理」，是能跑守恒律验证的物理。
